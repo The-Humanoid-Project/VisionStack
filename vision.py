@@ -3,13 +3,52 @@ import cv2
 from ultralytics import YOLO
 import google.generativeai as genai
 from PIL import Image
+import re
+import requests
+from bs4 import BeautifulSoup
 
+class OPACInterface:
+    def __init__(self):
+        self.url = "https://opac.library.iitb.ac.in/cgi-bin/koha/opac-search.pl"
+        self.PARAMS = {
+            "idx": "bc",
+            "limit": 1
+        }
+
+    def get_book_details(self, q_tag):
+        self.PARAMS["q"] = q_tag
+        
+        response = requests.get(self.url, params=self.PARAMS)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            title = soup.find('h1', class_='title').text.strip()
+            language = soup.find("span", class_="language").text.split()[1]
+            subject = soup.find_all("a", class_="subject")[1].text.strip()
+            call_no = soup.find("td", class_="call_no").text.strip()
+            availability = soup.find("td", class_="status").span.text.strip()
+            due_date = soup.find("td", class_="date_due").text.strip()
+            barcode = soup.find("td", class_="barcode").text.strip()
+            
+            description = {
+                "title": title,
+                "language": language,
+                "subject": subject,
+                "call_no": call_no,
+                "availability": availability,
+                "due_date": due_date,
+                "barcode": barcode
+            }
+            return description
+        else:
+            return "Some error occurred while fetching book details!"
 class ImageProcessor:
     def __init__(self):
         self.captured_image_count = self._find_latest_image_index("inferencing/captured_images")
         self.book_count = self._find_latest_image_index("inferencing/Books")
         self.model = "Models/train_scratch_v2x.pt"
         self.ocr_api_key = "AIzaSyB35dxJDDEkLR_Cm58Xm0NYGxaBHoNYAK4"
+        self.opac = OPACInterface()
 
     def _find_latest_image_index(self, directory):
         try:
@@ -55,11 +94,12 @@ class ImageProcessor:
                 cap.release()
             cv2.destroyAllWindows()
 
-    def capture_image(self, camera_index=0, target_resolution=(1920, 1080)):
+    def capture_image(self, camera_index=0, target_resolution=(2592, 1944)):
         if camera_index == 1: # Assuming 1 represents Jetson Nano
             return self._jetson_capture_image()
         else:
             return self._pc_capture_image(camera_index, target_resolution)
+
 
     def _pc_capture_image(self, camera_index, target_resolution):
         try:
@@ -75,7 +115,8 @@ class ImageProcessor:
                     print("Error: Could not read frame.")
                     return None
                 resized_frame = cv2.resize(frame, target_resolution)
-                cv2.namedWindow("Press Enter to capture", cv2.WINDOW_AUTOSIZE)
+                cv2.namedWindow("Press Enter to capture", cv2.WINDOW_NORMAL)
+                cv2.resizeWindow("Press Enter to capture", 1024, 1024)
                 cv2.imshow("Press Enter to capture", resized_frame)
                 key = cv2.waitKey(1) & 0xFF
                 if key == 13:
@@ -84,7 +125,7 @@ class ImageProcessor:
                         os.makedirs(directory)
                     self.captured_image_count += 1
                     save_path = os.path.join(directory, f"captured_image_{self.captured_image_count}.jpg")
-                    cv2.imwrite(save_path, resized_frame)
+                    cv2.imwrite(save_path, frame)
                     print("Image captured and saved successfully at:", save_path)
                     return save_path
                 elif key == 27:
@@ -138,7 +179,12 @@ class ImageProcessor:
                     cv2.imwrite(labelcrops_save_path, label_subimage)
                     print(f"Label Crop {label_count} saved successfully at:", labelcrops_save_path, f" Conf: {score} ", f" Label: {label}", f" for Book {book_count}")
                     label_count += 1
-                    print(self._perform_ocr(labelcrops_save_path))
+                    ocr_output = self._perform_ocr(labelcrops_save_path)
+                    barcode_no = re.search(r'\b\d{6}\b', ocr_output)
+                    print(f'Label Found at Book_{book_count} and Label_{label_count} has BarCode = {barcode_no.group(0)}')
+                    q_tag = barcode_no.group(0)
+                    book_details = self.opac.get_book_details(q_tag)
+                    print(book_details)
                 print('\n')
         except Exception as e:
             print(f"Error Saving Label Crops: {e}")
