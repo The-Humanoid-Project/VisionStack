@@ -165,7 +165,7 @@ class ImageProcessor:
             return self._jetson_capture_image()
         elif source == "pc_camera":
             return self._pc_capture_image(0, target_resolution)
-        elif source.startswith("iptv://"):
+        elif source.startswith("http://"):
             iptv_url = source.replace("iptv://", "")
             return self._iptv_capture_image(iptv_url)
         else:
